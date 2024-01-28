@@ -41,8 +41,8 @@ class MusicControls(View):
     # Skip Button
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="<:victor:1055476873058066442>")
     async def skip(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Implementation for skipping a song
-        pass  # Add your skip logic here
+        await skip(self.ctx)  # Call the skip command
+        await interaction.response.send_message("Skipping song...", ephemeral=True)
 
     # Stop Button
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="<:anders:1132023797889900635>")
@@ -80,24 +80,44 @@ def get_spotify_playlist_tracks(playlist_url):
 
 
 # Play the next song in the queue
-async def play_next_song(ctx):
-     guild_id = ctx.guild.id  # Get the guild ID
-     if ctx.voice_client and song_queues[guild_id]:  # Check if there are songs in the queue
-        url = song_queues[guild_id].popleft()  # Use popleft() to remove and return the leftmost song
-        ydl_opts = {
+
+# Function to play the next song from the queue
+async def play_song_from_queue(ctx):
+    guild_id = ctx.guild.id
+    if song_queues.get(guild_id):  # Ensure the queue exists for the guild
+        if song_queues[guild_id]:  # Check if there are songs in the queue
+            url = song_queues[guild_id].popleft()  # Remove the next song from the queue
+            ydl_opts = {
                 'format': 'bestaudio/best',
-                'default_search': 'ytsearch',  # This tells yt-dlp to search YouTube when a non-URL is provided
+                'default_search': 'ytsearch',  # Search YouTube for non-URLs
                 'quiet': True,
-                'source_address': '0.0.0.0'  # Bind to IPv4 since IPv6 addresses can cause issues sometimes
+                'source_address': '0.0.0.0'  # Avoid IPv6 issues
             }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # Ensure you handle both direct URLs and search queries appropriately here
-            video_url = info['url'] if 'url' in info else info['entries'][0]['url']
-        FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
-                          ,'options': '-vn -c:a libopus -b:a 96k'}
-        source = await discord.FFmpegOpusAudio.from_probe(video_url, **FFMPEG_OPTIONS)
-        ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(ctx), bot.loop))
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                video_url = info['url'] if 'url' in info else info['entries'][0]['url']
+            
+            FFMPEG_OPTIONS = {
+                'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                'options': '-vn -c:a libopus -b:a 96k'
+            }
+            source = await discord.FFmpegOpusAudio.from_probe(video_url, **FFMPEG_OPTIONS)
+            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_song_from_queue(ctx), bot.loop))
+        else:
+            # Optionally send a message when the queue is empty after skipping
+            await ctx.send("Queue is empty.")
+    else:
+        # Queue does not exist for the guild
+        await ctx.send("No active queue.")
+
+# Command to skip the current song and play the next one
+@bot.command(name='skip', help='Skip the Current Song')
+async def skip(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()  # This will trigger the 'after' callback, playing the next song if available
+        await ctx.send("Skipping current song...")
+    else:
+        await ctx.send("No song is currently playing.")
 
 
 @bot.event
@@ -154,7 +174,7 @@ async def play(ctx, *, url):
         await voice_channel.connect()
 
     if not ctx.voice_client.is_playing():
-        await play_next_song(ctx)
+        await play_song_from_queue(ctx)
 
 
 
