@@ -18,6 +18,8 @@ intents.guilds = True
 intents.voice_states = True  # This is crucial for music bots to work with voice channels
 
 song_queues = {}
+current_song = {}
+
 
 class MusicControls(View):
     def __init__(self, bot, ctx):
@@ -48,6 +50,7 @@ class MusicControls(View):
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="<:anders:1132023797889900635>")
     async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
         await self.ctx.voice_client.disconnect()
+        current_song.pop(self.ctx.guild.id, None)
         self.stop()  # Stop the view from listening to more interactions
 
 
@@ -102,12 +105,17 @@ async def play_song_from_queue(ctx):
                 'options': '-vn -c:a libopus -b:a 96k'
             }
             source = await discord.FFmpegOpusAudio.from_probe(video_url, **FFMPEG_OPTIONS)
+            song_title = info.get('title', 'Unknown Song')  # Fetch the song title from the 'info' dictionary
+            current_song[ctx.guild.id] = song_title  # Update the current song for the guild
+
             ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_song_from_queue(ctx), bot.loop))
         else:
             # Optionally send a message when the queue is empty after skipping
+            current_song.pop(ctx.guild.id, None)
             await ctx.send("Queue is empty.")
     else:
         # Queue does not exist for the guild
+        current_song.pop(ctx.guild.id, None)
         await ctx.send("No active queue.")
 
 # Command to skip the current song and play the next one
@@ -117,7 +125,10 @@ async def skip(ctx):
         ctx.voice_client.stop()  # This will trigger the 'after' callback, playing the next song if available
         await ctx.send("Skipping current song...")
     else:
+
         await ctx.send("No song is currently playing.")
+        current_song.pop(ctx.guild.id, None)
+
 
 
 @bot.event
@@ -177,6 +188,13 @@ async def play(ctx, *, url):
         await play_song_from_queue(ctx)
 
 
+@bot.command(name='now_playing', help='Show the currently playing song')
+async def now_playing(ctx):
+    guild_id = ctx.guild.id
+    if guild_id in current_song and current_song[guild_id]:
+        await ctx.send(f"Now playing: {current_song[guild_id]}")
+    else:
+        await ctx.send("No song is currently playing.")
 
 
 @bot.command(name='pause', help='Pause the music')
@@ -203,6 +221,7 @@ async def clear_queue(ctx):
     # Check if there's a queue for the guild and clear it
     if guild_id in song_queues and song_queues[guild_id]:
         song_queues[guild_id].clear()  # Clear the deque for this guild
+        current_song.pop(ctx.guild.id, None)
         await ctx.send("The song queue has been cleared.")
     else:
         await ctx.send("There are no songs in the queue.")
