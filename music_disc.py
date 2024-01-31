@@ -29,6 +29,32 @@ class MusicControls(View):
         self.bot = bot
         self.interaction = interaction
 
+    ####  PLAYS HÄR KOMMER MASTER YI WHEN PRESSED ######
+    @discord.ui.button(label="The Master Yi", style=discord.ButtonStyle.green)
+    async def master_yi_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # Define the YouTube search query or direct URL for "Här kommer Master Yi"
+        master_yi_song = "Här kommer Master Yi YouTube URL or search query"
+
+        # Add the song to the queue
+        guild_id = interaction.guild_id
+        if not song_queues.get(guild_id):
+            song_queues[guild_id] = deque()
+        song_queues[guild_id].append(master_yi_song)
+
+        # Send a message to indicate that the song is added to the queue
+        await interaction.response.send_message("Get ready... 🎶", ephemeral=True)
+
+        # Ensure the bot is connected to the voice channel and start playback if not already playing
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            voice_channel = interaction.user.voice.channel if interaction.user.voice else None
+            if voice_channel:
+                await voice_channel.connect()
+                voice_client = interaction.guild.voice_client
+
+        if voice_client and not voice_client.is_playing():
+            await play_song_from_queue(interaction)
+
     # Play/Pause Button
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.grey, emoji="<:maxime:1055476858776453291>")
     async def toggle_pause(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -97,33 +123,45 @@ async def skip_logic(guild):
 
 
 ## CRUCIAL FUNCTION TO PLAY THE ACTUAL SONG. KEY-STEP HERE IS THE FFMPEG AUDIO SETTINGS ##
-async def play_song_from_queue(ctx):
-    guild_id = ctx.guild.id
+
+async def play_song_from_queue(interaction):
+    guild_id = interaction.guild_id
     if song_queues.get(guild_id):  # Ensure the queue exists for the guild
         if song_queues[guild_id]:  # Check if there are songs in the queue
             url = song_queues[guild_id].popleft()  # Remove the next song from the queue
+            
+            # Setup yt_dlp options
             ydl_opts = {
                 'format': 'bestaudio/best',
-                'default_search': 'ytsearch',  # Search YouTube for non-URLs
+                'default_search': 'auto',  # Use 'auto' for automatic direct or search handling
                 'quiet': True,
-                'source_address': '0.0.0.0'  # Avoid IPv6 issues
+                'source_address': '0.0.0.0'  # Bind to IPv4
             }
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                video_url = info['url'] if 'url' in info else info['entries'][0]['url']
+                video_url = info['url'] if 'url' in info else info['entries'][0]['url']  # Extract the video URL
             
-            FFMPEG_OPTIONS = {
-                'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-                'options': '-vn -c:a libopus -b:a 96k'
-            }
-            source = await discord.FFmpegOpusAudio.from_probe(video_url, **FFMPEG_OPTIONS)
-            ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_song_from_queue(ctx), bot.loop))
+            # Access the guild's voice client
+            voice_client = interaction.guild.voice_client
+            if voice_client:  # Ensure the voice client exists
+                FFMPEG_OPTIONS = {
+                    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                    'options': '-vn -c:a libopus -b:a 96k'
+                }
+                source = await discord.FFmpegOpusAudio.from_probe(video_url, **FFMPEG_OPTIONS)
+                voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_song_from_queue(interaction), interaction.client.loop))
+            else:
+                # Handle the case where the bot is not connected to a voice channel
+                await interaction.followup.send("Bot is not connected to a voice channel.")
         else:
             # Optionally send a message when the queue is empty after skipping
-            await ctx.send("Queue is empty.")
+            await interaction.followup.send("Queue is empty.")
     else:
         # Queue does not exist for the guild
-        await ctx.send("No active queue.")
+        await interaction.followup.send("No active queue.")
+
+
 
 @bot.tree.command(name='skip', description='Skip the Current Song')
 async def skip(interaction: discord.Interaction):
@@ -138,29 +176,32 @@ async def on_ready():
 
 
 ## HANDLES THE PLAY COMMAND ###
-@bot.tree.command(name='play', description='Play a song from Spotify or YouTube link')
-@app_commands.describe(url='Song name or URL')
-async def play(interaction: discord.Interaction, url: str):
+import re
+
+@bot.tree.command(name='play', description='Play a song from Spotify, YouTube link, or search by name')
+@app_commands.describe(song='The Spotify or YouTube URL of the song or a search query')
+async def play(interaction: discord.Interaction, song: str):
     voice_channel = interaction.user.voice.channel if interaction.user.voice else None
-    guild_id = interaction.guild_id  # Use interaction.guild_id for slash commands
+    guild_id = interaction.guild_id
 
     if not song_queues.get(guild_id):
-        song_queues[guild_id] = deque()  # Initialize the guild's song queue if it doesn't exist
+        song_queues[guild_id] = deque()
 
     if not voice_channel:
         await interaction.response.send_message("You are not connected to a voice channel.")
         return
 
-    if 'spotify.com' in url:
-        # Spotify URL handling
-        if 'track' in url:
-            query = get_spotify_track(url)  # Fetch Spotify track details
-            song_queues[guild_id].append(query)  # Append track search query to queue
-            await interaction.response.send_message("Spotify track added to queue.")
-        elif 'playlist' in url:
-            track_queries = get_spotify_playlist_tracks(url)  # Fetch Spotify playlist track details
-            song_queues[guild_id].extend(track_queries)  # Extend the queue with track search queries
-            await interaction.response.send_message(f"Spotify playlist added to queue. {len(track_queries)} tracks queued.")
+    await interaction.response.defer()
+
+    if 'spotify.com' in song:
+        # Handle Spotify links as before
+        if 'track' in song:
+            query = get_spotify_track(song)
+            song_queues[guild_id].append(query)
+        elif 'playlist' in song:
+            track_queries = get_spotify_playlist_tracks(song)
+            song_queues[guild_id].extend(track_queries)
+        await interaction.followup.send("Spotify content added to queue.")
     else:
         # YT-DLP for direct URLs or search queries
         ydl_opts = {
@@ -171,16 +212,28 @@ async def play(interaction: discord.Interaction, url: str):
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            video_url = info['url'] if 'url' in info else info['entries'][0]['url']
-            song_queues[guild_id].append(video_url)  # Append the video URL to the queue
-            await interaction.response.send_message(f"Song added to queue: {info['title']}")
+            # Check if 'song' is a URL or a search query
+            if re.match(r'https?://(?:www\.)?.+', song):
+                info = ydl.extract_info(song, download=False)
+            else:
+                info = ydl.extract_info(f"ytsearch:{song}", download=False)['entries'][0]
 
-    if not interaction.guild.voice_client:
+            video_url = info.get('url', None)
+            if video_url:
+                song_queues[guild_id].append(video_url)
+                await interaction.followup.send(f"Song added to queue: {info['title']}")
+            else:
+                await interaction.followup.send("Could not find the song.")
+
+    voice_client = interaction.guild.voice_client
+    if not voice_client:
         await voice_channel.connect()
+        voice_client = interaction.guild.voice_client
 
-    if not interaction.guild.voice_client.is_playing():
+    if not voice_client.is_playing():
         await play_song_from_queue(interaction)
+    controls = MusicControls(bot, interaction)
+    await interaction.followup.send("Control your audio 🍹:", view=controls)
 
 
 ########   SIMPLE COMMANDS  ###########
