@@ -23,6 +23,8 @@ intents.guilds = True
 intents.voice_states = True  # This is crucial for music bots to work with voice channels
 
 song_queues = {}
+current_song = {}
+
 
 class MusicControls(View):
     def __init__(self, bot, interaction):
@@ -169,9 +171,6 @@ async def play_song_from_queue(interaction):
         else:
             # Optionally send a message when the queue is empty after skipping
             await interaction.followup.send("Queue is empty.")
-    else:
-        # Queue does not exist for the guild
-        await interaction.followup.send("No active queue.")
 
 
 
@@ -355,28 +354,37 @@ async def start_music_quiz(interaction: discord.Interaction, category: str):
         await interaction.response.send_message("Invalid category. Please choose from: rock, pop, rnb, rap.", ephemeral=True)
         return
 
-    # Fetch track URLs from the Spotify playlist
     track_urls = get_spotify_playlist_tracks(playlist_url)
-    random_track_url = random.choice(track_urls)  # Choose a random track URL from the playlist
+    random_track_url = random.choice(track_urls)
 
     guild_id = interaction.guild_id
-    # Initialize the song queue for the guild if it does not exist
     if guild_id not in song_queues:
         song_queues[guild_id] = deque()
-
-    # Add the selected track to the queue for playback
     song_queues[guild_id].append(random_track_url)
-    if not interaction.guild.voice_client.is_playing():
+
+    voice_client = interaction.guild.voice_client
+    # Check if the bot is connected to a voice channel, if not try to connect
+    if not voice_client:
+        if interaction.user.voice:
+            voice_channel = interaction.user.voice.channel
+            voice_client = await voice_channel.connect()
+            await interaction.response.send_message("Starting quiz... ⛱️", ephemeral=True)
+        else:
+            await interaction.followup.send("You need to be in a voice channel to start the quiz.")
+            return
+
+    # Now, you can safely check if the voice_client is playing
+    if not voice_client.is_playing():
         await play_song_from_queue(interaction)
 
-    # Generate quiz options and display controls
-    options = [random_track_url] + random.sample(track_urls, 3)  # Choose 3 random tracks as incorrect options
+    options = [random_track_url] + random.sample(track_urls, 3)
     random.shuffle(options)
     correct_option_index = options.index(random_track_url)
+    songs_played = 1
+    quiz_controls = MusicQuizControls(bot, interaction, options, correct_option_index, playlist_url, songs_played)
 
-    # Show the quiz controls with the options
-    quiz_controls = MusicQuizControls(bot, interaction, options, correct_option_index)
     await interaction.followup.send("Guess the song:", view=quiz_controls)
+
 
 
 
@@ -393,34 +401,142 @@ async def quiz_category(interaction: discord.Interaction, category: str):
 
 ###### QUIZ BUTTONS #########
 class MusicQuizControls(View):
-    def __init__(self, bot, interaction, options, correct_option_index):
+    def __init__(self, bot, interaction, options, correct_option_index, playlist_url,songs_played=0):
         super().__init__(timeout=None)
         self.bot = bot
         self.interaction = interaction
         self.options = options
         self.correct_option_index = correct_option_index
+        self.playlist_url = playlist_url
+        self.songs_played = songs_played  # Counter for the number of songs played
+        self.correct_guessed = False
+        self.add_option_buttons()
 
-    async def handle_guess(self, interaction: discord.Interaction, button: discord.ui.Button, guess_index):
-        user_id = self.interaction.user.id
+    def add_option_buttons(self):
+        for idx, option in enumerate(self.options):
+            # Truncate the label if it exceeds 80 characters
+            label = (option[:77] + '...') if len(option) > 80 else option
+
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+
+            async def option_callback(button_interaction: discord.Interaction, idx=idx, self=self):
+                await self.handle_guess(button_interaction, idx)
+
+            button.callback = option_callback
+            self.add_item(button)
+
+    async def handle_guess(self, button_interaction: discord.Interaction, guess_index):
+        user_id = button_interaction.user.id
         user_points[user_id] = user_points.get(user_id, 0)
 
+        # Check the guess and update points
         if guess_index == self.correct_option_index:
             user_points[user_id] += 1
-            response = "Correct! +1 point."
+            response = f"Correct! +1 point. {button_interaction.user.mention} guessed it right."
+            self.correct_guessed = True
+            # If the guess was correct, wait for a bit before moving to the next song
+            await asyncio.sleep(15)  # Let the song play for another 15 seconds
+            await self.change_song(button_interaction)
         else:
             user_points[user_id] -= 1
-            response = "Incorrect! -1 point."
+            response = f"Incorrect! -1 point. {button_interaction.user.mention} guessed it wrong."
+            # Start a delayed task to change the song after 30 seconds if incorrect
+            asyncio.create_task(self.delayed_song_change(button_interaction))
 
-        await self.interaction.response.send_message(response, ephemeral=True)
-        await asyncio.sleep(15)  # Optional delay after a correct guess
+        # Disable all option buttons to prevent further selections
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+        # Update the message with the response and the disabled buttons
+        await button_interaction.response.edit_message(content=response, view=self)
+
+    async def delayed_song_change(self, interaction):
+        await asyncio.sleep(30)  # Wait for 30 seconds before changing the song
+        if not self.correct_guessed:  # Only change the song if the correct answer hasn't been guessed
+            await self.change_song(interaction)
+
+    async def next_song_timeout(self, interaction):
+        await asyncio.sleep(60)  # Wait for 60 seconds
+        if not self.correct_guessed:  # Check if the correct answer was not guessed
+            await self.change_song(self.interaction)  # Move to the next song
+
+
+    async def change_song(self, interaction):
+        # Stop the current song and automatically trigger the next song in the queue
+        self.songs_played += 1  # Increment the song counter
+
+        if self.songs_played >= 6:
+            # The quiz ends after 10 songs
+            await self.send_final_scores(interaction)
+            await self.reset_quiz(interaction)
+            return  # Exit the method to prevent starting a new song
+        await skip_logic(interaction.guild)
+        self.correct_guessed = False
+        # Send the updated scores before starting the new song
         await self.send_scores(interaction)
+
+        # Fetch new track URLs from the Spotify playlist for the next quiz question
+        track_urls = get_spotify_playlist_tracks(self.playlist_url)
+        new_track_urls = [url for url in track_urls if url not in self.options]  # Ensure new songs are not repeats
+        random_track_url = random.choice(new_track_urls)
+
+        # Update the queue with the new song for the next quiz question
+        guild_id = interaction.guild_id
+        if guild_id not in song_queues:
+            song_queues[guild_id] = deque()
+        song_queues[guild_id].clear()  # Clear the current queue
+        song_queues[guild_id].append(random_track_url)  # Add the new song to the queue
+
+        # Play the new song
+        if interaction.guild.voice_client.is_playing() or interaction.guild.voice_client.is_paused():
+            interaction.guild.voice_client.stop()
+        await play_song_from_queue(interaction)
+
+        # Generate new quiz options ensuring they are unique and not repeating the previous ones
+        new_options = [random_track_url] + random.sample([url for url in new_track_urls if url != random_track_url], 3)
+        random.shuffle(new_options)  # Shuffle the new options
+        new_correct_option_index = new_options.index(random_track_url)  # Find the index of the correct option
+
+        # Create a new instance of MusicQuizControls with the new options for the next quiz question
+        new_quiz_controls = MusicQuizControls(self.bot, interaction, new_options, new_correct_option_index, self.playlist_url, songs_played=self.songs_played)
+
+        # Send a new message with the new quiz question and options
+        await interaction.followup.send("Guess the new song:", view=new_quiz_controls)
+        asyncio.create_task(self.next_song_timeout(interaction))
+
+
 
     async def send_scores(self, interaction):
         scores_message = "Current scores:\n"
         for user_id, points in user_points.items():
             user = await self.bot.fetch_user(user_id)
             scores_message += f"{user.name}: {points} points\n"
-        await self.interaction.followup.send(scores_message, ephemeral=False)
+
+        # Use followup.send to make the scores message visible to everyone
+        await interaction.followup.send(scores_message)
+    async def reset_quiz(self, interaction):
+        # Reset the scores
+        user_points.clear()
+
+        # Clear the song queue for the guild
+        guild_id = interaction.guild_id
+        if guild_id in song_queues:
+            song_queues[guild_id].clear()
+
+        # Optionally, send a message indicating the end of the quiz round and the reset
+        await interaction.followup.send("The quiz round has ended. Scores have been reset. Starting a new round...")
+
+    async def send_final_scores(self, interaction):
+        scores_message = "🎉 The music quiz is over! Here are the final scores: 🎉\n"
+        # Sort user points dictionary by points to get the ranking
+        sorted_scores = sorted(user_points.items(), key=lambda x: x[1], reverse=True)
+        for user_id, points in sorted_scores:
+            user = await self.bot.fetch_user(user_id)
+            emoji = "🥇" if points == sorted_scores[0][1] else "🎵"  # Example: gold medal for the top scorer
+            scores_message += f"{emoji} {user.name}: {points} points\n"
+        
+        await interaction.followup.send(scores_message)
 
     # Remember to add buttons for options when initializing MusicQuizControls
 
