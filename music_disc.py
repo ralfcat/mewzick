@@ -347,14 +347,27 @@ async def quiz(interaction: discord.Interaction):
 
 
 from collections import deque  # Ensure deque is imported at the top of your script
+spotify_tracks_cache = {}
 
+def get_cached_spotify_tracks(playlist_url):
+    if playlist_url in spotify_tracks_cache:
+        return spotify_tracks_cache[playlist_url]
+    else:
+        track_urls = get_spotify_playlist_tracks(playlist_url)
+        spotify_tracks_cache[playlist_url] = track_urls
+        return track_urls
+
+
+
+# Revised start_music_quiz function to use cached tracks
 async def start_music_quiz(interaction: discord.Interaction, category: str):
     playlist_url = category_playlists.get(category.lower())
     if not playlist_url:
         await interaction.response.send_message("Invalid category. Please choose from: rock, pop, rnb, rap.", ephemeral=True)
         return
 
-    track_urls = get_spotify_playlist_tracks(playlist_url)
+    track_urls = get_cached_spotify_tracks(playlist_url)  # Use cached Spotify tracks
+    # Rest of the function remains the same..
     random_track_url = random.choice(track_urls)
 
     guild_id = interaction.guild_id
@@ -382,7 +395,8 @@ async def start_music_quiz(interaction: discord.Interaction, category: str):
     correct_option_index = options.index(random_track_url)
     songs_played = 1
     quiz_controls = MusicQuizControls(bot, interaction, options, correct_option_index, playlist_url, songs_played)
-
+    await interaction.followup.send("Let the quiz begin! Here's the initial scoreboard:", view=quiz_controls)
+    await quiz_controls.send_scores(interaction)  # Display initial scores
     await interaction.followup.send("Guess the song:", view=quiz_controls)
 
 
@@ -401,25 +415,45 @@ async def quiz_category(interaction: discord.Interaction, category: str):
 
 ###### QUIZ BUTTONS #########
 class MusicQuizControls(View):
-    def __init__(self, bot, interaction, options, correct_option_index, playlist_url,songs_played=0):
+    def __init__(self, bot, interaction, options, correct_option_index, playlist_url, songs_played=0):
         super().__init__(timeout=None)
         self.bot = bot
         self.interaction = interaction
         self.options = options
         self.correct_option_index = correct_option_index
         self.playlist_url = playlist_url
-        self.songs_played = songs_played  # Counter for the number of songs played
+        self.songs_played = songs_played
         self.correct_guessed = False
+        self.joined_users = set()  # Track users who have joined the quiz
+
+        self.add_join_button()
         self.add_option_buttons()
+
+    def add_join_button(self):
+        join_button = discord.ui.Button(label="Join Quiz", style=discord.ButtonStyle.green)
+
+        async def join_callback(interaction: discord.Interaction, button: discord.ui.Button):
+            self.joined_users.add(interaction.user.id)
+            await interaction.response.send_message(f"{interaction.user.display_name} has joined the quiz! 🎉", ephemeral=True)
+            button.disabled = True
+            await interaction.message.edit(view=self)
+
+        join_button.callback = join_callback
+        self.add_item(join_button)
+
+    async def start(self):
+        await asyncio.sleep(20)  # Wait for 20 seconds
+        self.remove_item(self.children[0])  # Assuming the "Join Quiz" button is the first item added
+        await self.interaction.edit_original_response(view=self)
+        await self.send_scores("Quiz participants 📋:")
 
     def add_option_buttons(self):
         for idx, option in enumerate(self.options):
-            # Truncate the label if it exceeds 80 characters
             label = (option[:77] + '...') if len(option) > 80 else option
-
             button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
 
             async def option_callback(button_interaction: discord.Interaction, idx=idx, self=self):
+                await button_interaction.response.defer()
                 await self.handle_guess(button_interaction, idx)
 
             button.callback = option_callback
@@ -429,27 +463,41 @@ class MusicQuizControls(View):
         user_id = button_interaction.user.id
         user_points[user_id] = user_points.get(user_id, 0)
 
-        # Check the guess and update points
         if guess_index == self.correct_option_index:
             user_points[user_id] += 1
             response = f"Correct! +1 point. {button_interaction.user.mention} guessed it right."
             self.correct_guessed = True
-            # If the guess was correct, wait for a bit before moving to the next song
-            await asyncio.sleep(15)  # Let the song play for another 15 seconds
-            await self.change_song(button_interaction)
         else:
             user_points[user_id] -= 1
-            response = f"Incorrect! -1 point. {button_interaction.user.mention} guessed it wrong."
-            # Start a delayed task to change the song after 30 seconds if incorrect
-            asyncio.create_task(self.delayed_song_change(button_interaction))
+            response = f"Incorrect! Zero points awarded. {button_interaction.user.mention} guessed it wrong."
 
-        # Disable all option buttons to prevent further selections
+        # Initially defer the response if there's any delay expected in processing
+        await button_interaction.response.defer(ephemeral=True)
+
+        # Use followup.send to send the response message
+        await button_interaction.followup.send(response, ephemeral=True)
+
+        if guess_index == self.correct_option_index:
+            await self.change_song(button_interaction)  # Change song immediately after correct guess
+        else:
+            asyncio.create_task(self.delayed_song_change(button_interaction))  # Delayed song change for incorrect guess
+
+
+        # Disable the guessed button to prevent multiple guesses
         for item in self.children:
-            if isinstance(item, discord.ui.Button):
+            if isinstance(item, discord.ui.Button) and item.label == self.options[guess_index]:
                 item.disabled = True
+                await button_interaction.message.edit(view=self)
+                break
 
-        # Update the message with the response and the disabled buttons
-        await button_interaction.response.edit_message(content=response, view=self)
+    async def send_scores(self, message_prefix="Current scores 🏆:"):
+        scores_message = message_prefix + "\n"
+        for user_id in self.joined_users:
+            points = user_points.get(user_id, 0)
+            user = await self.bot.fetch_user(user_id)
+            scores_message += f"{user.name}: {points} points\n"
+
+        await self.interaction.followup.send(scores_message, ephemeral=True)
 
     async def delayed_song_change(self, interaction):
         await asyncio.sleep(30)  # Wait for 30 seconds before changing the song
@@ -507,14 +555,6 @@ class MusicQuizControls(View):
 
 
 
-    async def send_scores(self, interaction):
-        scores_message = "Current scores:\n"
-        for user_id, points in user_points.items():
-            user = await self.bot.fetch_user(user_id)
-            scores_message += f"{user.name}: {points} points\n"
-
-        # Use followup.send to make the scores message visible to everyone
-        await interaction.followup.send(scores_message)
     async def reset_quiz(self, interaction):
         # Reset the scores
         user_points.clear()
@@ -528,16 +568,7 @@ class MusicQuizControls(View):
         await interaction.followup.send("The quiz round has ended. Scores have been reset. Starting a new round...")
 
     async def send_final_scores(self, interaction):
-        scores_message = "🎉 The music quiz is over! Here are the final scores: 🎉\n"
-        # Sort user points dictionary by points to get the ranking
-        sorted_scores = sorted(user_points.items(), key=lambda x: x[1], reverse=True)
-        for user_id, points in sorted_scores:
-            user = await self.bot.fetch_user(user_id)
-            emoji = "🥇" if points == sorted_scores[0][1] else "🎵"  # Example: gold medal for the top scorer
-            scores_message += f"{emoji} {user.name}: {points} points\n"
-        
-        await interaction.followup.send(scores_message)
-
+        await self.send_scores("🎉 The music quiz is over! Final scores 🎼:")
     # Remember to add buttons for options when initializing MusicQuizControls
 
 
