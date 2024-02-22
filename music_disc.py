@@ -544,4 +544,4 @@ class MusicQuizControls(View):
 # When initializing MusicQuizControls, also call add_buttons to add the option buttons
 
 ### TOKEN TO RUN THE BOT ####
-bot.run('MTIwMDgzMDQ5NTAyMjM5OTYwOQ.GVaJVV.UTjbUbukX9PvnwMbXjmYk7Ef1LFBkuSMdxlUx8')
+bot.run('')
