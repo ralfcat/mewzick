@@ -228,4 +228,6 @@ async def clear_queue(ctx):
 @bot.command(name='show_controls', help='Show music control buttons')
 async def show_controls(ctx):
     await ctx.send("Here are the music control buttons:", view=MusicControls(bot, ctx))
-bot.run('MTIwMDgzMDQ5NTAyMjM5OTYwOQ.Ga1wcT.1cX3uvxNtoVKzZJYx1mb-sHMT_7xBx_BLZDKZI')
+
+token = ''
+bot.run(token)
