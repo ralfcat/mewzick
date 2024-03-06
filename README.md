@@ -1,7 +1,4 @@
-#Created by Victor Englöf as a fun sideproject 
-#Not intended for commercial use
-#I dont own or claim any music or sound played through the bot. This property belongs to the copyright owners and youtube themselves (from where the audio is streamed from)
-#Spotify API ONLY used for mining relevant information from spotify links. 
+
 
 # To run the bot
 
