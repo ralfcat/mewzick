@@ -129,6 +129,17 @@ def get_spotify_playlist_tracks(playlist_url):
         track_queries.append(query)  # Append the search query to the list
     return track_queries
 
+# Function to get Spotify album tracks
+def get_spotify_album_tracks(playlist_url):
+    track_queries = []  # Store search queries instead of URLs
+    album = sp.album(playlist_url)
+    for item in album['tracks']['items']:
+        track = item['track']
+        # Form a search query combining the track's name and artist's name
+        query = f"{track['name']} {track['artists'][0]['name']}"
+        track_queries.append(query)  # Append the search query to the list
+    return track_queries
+
 async def skip_logic(guild):
     voice_client = guild.voice_client
     if voice_client and voice_client.is_playing():
@@ -211,6 +222,9 @@ async def play(interaction: discord.Interaction, song: str):
             song_queues[guild_id].append(query)
         elif 'playlist' in song:
             track_queries = get_spotify_playlist_tracks(song)
+            song_queues[guild_id].extend(track_queries)
+        elif 'album' in song:
+            track_queries = get_spotify_album_tracks(song)
             song_queues[guild_id].extend(track_queries)
         await interaction.followup.send("Spotify content added to queue.")
     else:
