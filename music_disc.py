@@ -30,17 +30,17 @@ class MusicControls(View):
     def __init__(self, bot, interaction):
         super().__init__(timeout=None)  # No timeout for the view
         self.bot = bot
-        self.interaction = interaction
+        self.original_interaction = interaction
 
     ####  PLAYS HÄR KOMMER MASTER YI WHEN PRESSED ######
     @discord.ui.button(label="The Master Yi", style=discord.ButtonStyle.green)
-    async def master_yi_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def master_yi_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if the interaction is in a guild
-        if self.interaction.guild is None:
+        if self.original_interaction.guild is None:
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
 
-        guild_id = self.interaction.guild_id
+        guild_id = self.original_interaction.guild_id
 
         # Define the song to play
         master_yi_song = "Här kommer Master Yi"
@@ -51,17 +51,17 @@ class MusicControls(View):
         song_queues[guild_id].append(master_yi_song)
 
         # Send a response to acknowledge the button press
-        await self.interaction.response.send_message("Här kommer han... 🏄 🏄", ephemeral=True)
-        await skip_logic(self.interaction.guild) 
+        await self.original_interaction.response.send_message("Här kommer han... 🏄 🏄", ephemeral=True)
+        await skip_logic(self.original_interaction.guild) 
         # Connect to the voice channel if not already connected and start playing if not already playing
-        voice_client = self.interaction.guild.voice_client
+        voice_client = self.original_interaction.guild.voice_client
         if voice_client is None:
-            if self.interaction.user.voice:
-                voice_channel = self.interaction.user.voice.channel
+            if self.original_interaction.user.voice:
+                voice_channel = self.original_interaction.user.voice.channel
                 await voice_channel.connect()
-                voice_client = self.interaction.guild.voice_client
+                voice_client = self.original_interaction.guild.voice_client
             else:
-                await self.interaction.followup.send("You need to be in a voice channel to use this command.", ephemeral=True)
+                await self.original_interaction.followup.send("You need to be in a voice channel to use this command.", ephemeral=True)
                 return
 
         if not voice_client.is_playing():
@@ -70,8 +70,9 @@ class MusicControls(View):
 
     # Play/Pause Button
     @discord.ui.button(label="Pause", style=discord.ButtonStyle.grey, emoji="<:maxime:1055476858776453291>")
-    async def toggle_pause(self, button: discord.ui.Button, interaction: discord.Interaction):
-        voice_client = self.interaction.guild.voice_client
+    async def toggle_pause(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        voice_client = self.original_interaction.guild.voice_client
         if voice_client.is_playing():
             await voice_client.pause()
             button.label = "Play"
@@ -80,18 +81,20 @@ class MusicControls(View):
             await voice_client.resume()
             button.label = "Pause"
             button.emoji = ":victor:"
-        await self.interaction.response.edit_message(view=self)
+        await self.original_interaction.response.edit_message(view=self)
 
     # Skip Button
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.blurple, emoji="<:victor:1055476873058066442>")
-    async def skip_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        await skip_logic(self.interaction.guild)  # Use the new skip logic function
-        await self.interaction.response.send_message("Skipping song...", ephemeral=True)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await skip_logic(self.original_interaction.guild)  # Use the new skip logic function
+        await self.original_interaction.response.send_message("Skipping song...", ephemeral=True)
 
     # Stop Button
     @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="<:anders:1132023797889900635>")
-    async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
-        voice_client = self.interaction.guild.voice_client
+    async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        voice_client = self.original_interaction.guild.voice_client
         if voice_client:
             await voice_client.disconnect()
         self.stop()  # Stop the view from listening to more interactions
@@ -113,32 +116,41 @@ song_queue = deque()
 def get_spotify_track(url):
     track_info = sp.track(url)
     track_name = track_info['name']
+    artist_id = track_info['artists'][0]['id']  # Fetch the artist's ID
     artist_name = track_info['artists'][0]['name']
-    return f"{track_name} {artist_name}"  # Return a search query for yt-dlp
+    return f"{track_name} {artist_name}",artist_id  # Return a search query for yt-dlp
 
 
 
-# Function to get Spotify playlist tracks
+# Function to get Spotify playlist tracks including artist IDs
 def get_spotify_playlist_tracks(playlist_url):
-    track_queries = []  # Store search queries instead of URLs
+    track_queries_and_ids = []  # Store tuples of search queries and artist IDs
     playlist = sp.playlist(playlist_url)
     for item in playlist['tracks']['items']:
         track = item['track']
-        # Form a search query combining the track's name and artist's name
-        query = f"{track['name']} {track['artists'][0]['name']}"
-        track_queries.append(query)  # Append the search query to the list
-    return track_queries
+        artist_id = track['artists'][0]['id']  # Fetch the artist's ID
+        # Form a tuple with the search query and the artist's ID
+        query_and_id = (f"{track['name']} {track['artists'][0]['name']}", artist_id)
+        track_queries_and_ids.append(query_and_id)
+    return track_queries_and_ids
 
-# Function to get Spotify album tracks
-def get_spotify_album_tracks(playlist_url):
-    track_queries = []  # Store search queries instead of URLs
-    album = sp.album(playlist_url)
+# Function to get Spotify album tracks including artist IDs
+def get_spotify_album_tracks(album_url):
+    track_queries_and_ids = []  # Store tuples of search queries and artist IDs
+    album = sp.album(album_url)
     for item in album['tracks']['items']:
-        track = item['track']
-        # Form a search query combining the track's name and artist's name
-        query = f"{track['name']} {track['artists'][0]['name']}"
-        track_queries.append(query)  # Append the search query to the list
-    return track_queries
+        artist_id = item['artists'][0]['id']  # Fetch the artist's ID
+        # Form a tuple with the search query and the artist's ID
+        query_and_id = (f"{item['name']} {item['artists'][0]['name']}", artist_id)
+        track_queries_and_ids.append(query_and_id)
+    return track_queries_and_ids
+
+# Function to fetch artist's genre
+def get_artist_genre(artist_id):
+    artist_info = sp.artist(artist_id)
+    genres = artist_info['genres']
+    return ', '.join(genres) if genres else 'Unknown'
+
 
 async def skip_logic(guild):
     voice_client = guild.voice_client
@@ -168,6 +180,8 @@ async def play_song_from_queue(interaction):
                 video_url = info['url'] if 'url' in info else info['entries'][0]['url']  # Extract the video URL
             
             # Access the guild's voice client
+            log_interaction(interaction, "Playing Song", url)
+
             voice_client = interaction.guild.voice_client
             if voice_client:  # Ensure the voice client exists
                 FFMPEG_OPTIONS = {
@@ -187,6 +201,7 @@ async def play_song_from_queue(interaction):
 
 @bot.tree.command(name='skip', description='Skip the Current Song')
 async def skip(interaction: discord.Interaction):
+    log_interaction(interaction, "Skip", "Skipped song")
     await skip_logic(interaction.guild)  # Use the new skip logic function
     await interaction.response.send_message("Skipping current song...")
 
@@ -216,16 +231,16 @@ async def play(interaction: discord.Interaction, song: str):
     await interaction.response.defer()
 
     if 'spotify.com' in song:
-        # Handle Spotify links as before
         if 'track' in song:
-            query = get_spotify_track(song)
-            song_queues[guild_id].append(query)
+            query, artist_id = get_spotify_track(song)
+            genre = get_artist_genre(artist_id)  # Assume this function fetches genre based on artist_id
+            song_queues[guild_id].append((query, genre))
         elif 'playlist' in song:
-            track_queries = get_spotify_playlist_tracks(song)
-            song_queues[guild_id].extend(track_queries)
+            track_queries_and_genres = [(query, get_artist_genre(artist_id)) for query, artist_id in get_spotify_playlist_tracks(song)]
+            song_queues[guild_id].extend(track_queries_and_genres)
         elif 'album' in song:
-            track_queries = get_spotify_album_tracks(song)
-            song_queues[guild_id].extend(track_queries)
+            track_queries_and_genres = [(query, get_artist_genre(artist_id)) for query, artist_id in get_spotify_album_tracks(song)]
+            song_queues[guild_id].extend(track_queries_and_genres)
         await interaction.followup.send("Spotify content added to queue.")
     else:
         # YT-DLP for direct URLs or search queries
@@ -345,18 +360,86 @@ user_points = {}
 
 @bot.tree.command(name='quiz', description='Start a music quiz')
 async def quiz(interaction: discord.Interaction):
-    category_buttons = View(timeout=30)
+    join_view = JoinQuizView(bot)
+    join_view.initial_interaction = interaction  # Set the interaction here
+    await interaction.response.send_message("🎉 Click to join the music quiz! 🎵", view=join_view)
 
-    for category in category_playlists.keys():
-        button = Button(label=category.capitalize(), style=discord.ButtonStyle.secondary)
 
-        async def button_callback(interaction: discord.Interaction, category=category):
-            await start_music_quiz(interaction, category)
 
-        button.callback = functools.partial(button_callback, category=category)
-        category_buttons.add_item(button)
 
-    await interaction.response.send_message("Choose a category:", view=category_buttons, ephemeral=True)
+class JoinQuizView(View):
+    def __init__(self, bot, timeout=20):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.joined_users = set()
+        self.initial_interaction = None  # Initialize a placeholder for the interaction
+
+    @discord.ui.button(label="Join Quiz", style=discord.ButtonStyle.green)
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log_quiz_interaction(interaction, "Join Quiz", f"{interaction.user.display_name} joined the quiz")
+        if self.initial_interaction is None:
+            self.initial_interaction = interaction  # Store the interaction when the button is first pressed
+        self.joined_users.add(interaction.user.id)
+        await interaction.response.send_message(f"✅ {interaction.user.display_name}, you've successfully joined the quiz! Get ready to vote for the genre! 🎶", ephemeral=True)
+        button.disabled = True
+        await interaction.message.edit(view=self)
+
+    async def on_timeout(self):
+        
+        for item in self.children:
+            item.disabled = True
+        if self.initial_interaction:
+            await self.initial_interaction.edit_original_response(view=self)
+            await self.start_genre_voting(self.initial_interaction, self.joined_users)
+            log_quiz_interaction(self.initial_interaction, "Start Genre Voting", "Genre voting started")
+        else:
+            print("No interaction available for genre voting.")
+
+
+
+    async def start_genre_voting(self, interaction, joined_users):
+        # Initialize and display the GenreVotingView for genre voting
+        genre_voting_view = GenreVotingView(self.bot, interaction, joined_users)  # Include the interaction here
+        await interaction.followup.send("🗳️ Vote for your preferred music genre:", view=genre_voting_view)
+
+
+class GenreVotingView(View):
+    def __init__(self, bot, interaction, joined_users, timeout=20):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.interaction = interaction  # Store the interaction
+        self.joined_users = joined_users
+        self.votes = {genre: 0 for genre in category_playlists.keys()}
+        self.add_genre_buttons()
+
+    def add_genre_buttons(self):
+        for genre in category_playlists.keys():
+            button = discord.ui.Button(label=genre.capitalize(), style=discord.ButtonStyle.secondary)
+
+            async def vote_callback(interaction: discord.Interaction, genre=genre, button=button):
+                if interaction.user.id in self.joined_users:
+                    self.votes[genre] += 1
+                    await interaction.response.send_message(f"{interaction.user.display_name} voted for {genre}!", ephemeral=True)
+                    log_quiz_interaction(interaction, "Vote Genre", f"{interaction.user.display_name} voted for {genre}")
+                    button.disabled = True
+                    await interaction.message.edit(view=self)
+                else:
+                    await interaction.response.send_message("You need to join the quiz to vote!", ephemeral=True)
+    
+            button.callback = functools.partial(vote_callback, genre=genre)
+            self.add_item(button)
+
+    async def on_timeout(self):
+        # Determine the winning genre after voting ends
+        winning_genre = max(self.votes, key=self.votes.get)
+        # Start the quiz with the winning genre using the stored interaction
+        await self.interaction.followup.send(f"The winning genre is {winning_genre}! Starting the quiz... ⛱️")
+        log_quiz_interaction(self.interaction, "End Genre Voting", f"Winning genre: {winning_genre}")
+        # Call the function to start the quiz with the winning genre
+        # Ensure that the function you're calling is designed to start the quiz and handle the interaction properly
+        await start_music_quiz(self.interaction, winning_genre, self.joined_users)
+
+
 
 
 
@@ -374,47 +457,57 @@ def get_cached_spotify_tracks(playlist_url):
 
 
 # Revised start_music_quiz function to use cached tracks
-async def start_music_quiz(interaction: discord.Interaction, category: str):
+async def start_music_quiz(interaction: discord.Interaction, category: str, joined_users):
+    # Log quiz interaction
+    log_quiz_interaction(interaction, "Quiz Start", f"Category: {category}, Participants: {len(joined_users)}")
+
+    # Get playlist URL from category
     playlist_url = category_playlists.get(category.lower())
     if not playlist_url:
         await interaction.response.send_message("Invalid category. Please choose from: rock, pop, rnb, rap.", ephemeral=True)
         return
 
-    track_urls = get_cached_spotify_tracks(playlist_url)  # Use cached Spotify tracks
-    # Rest of the function remains the same..
+    # Use cached Spotify tracks
+    track_urls = get_cached_spotify_tracks(playlist_url)
+    if not track_urls:
+        await interaction.response.send_message("Failed to load songs. Please try again later.", ephemeral=True)
+        return
+
+    # Select a random track URL
     random_track_url = random.choice(track_urls)
 
+    # Initialize song queue for the guild
     guild_id = interaction.guild_id
-    if guild_id not in song_queues:
-        song_queues[guild_id] = deque()
-    song_queues[guild_id].append(random_track_url)
+    song_queues.setdefault(guild_id, deque()).append(random_track_url)
 
+    # Connect to voice channel if not already connected
     voice_client = interaction.guild.voice_client
-    # Check if the bot is connected to a voice channel, if not try to connect
     if not voice_client:
         if interaction.user.voice:
             voice_channel = interaction.user.voice.channel
-            voice_client = await voice_channel.connect()
-            await interaction.response.send_message("Starting quiz... ⛱️", ephemeral=True)
+            try:
+                voice_client = await voice_channel.connect()
+            except Exception as e:
+                await interaction.followup.send(f"Failed to connect to voice channel: {e}", ephemeral=True)
+                return
         else:
-            await interaction.followup.send("You need to be in a voice channel to start the quiz.")
+            await interaction.followup.send("You need to be in a voice channel to start the quiz.", ephemeral=True)
             return
 
-    # Now, you can safely check if the voice_client is playing
+    # Play song if not already playing
     if not voice_client.is_playing():
         await play_song_from_queue(interaction)
 
+    # Generate options for the quiz question
     options = [random_track_url] + random.sample(track_urls, 3)
     random.shuffle(options)
     correct_option_index = options.index(random_track_url)
-    songs_played = 1
-    quiz_controls = MusicQuizControls(bot, interaction, options, correct_option_index, playlist_url, songs_played)
-    await interaction.followup.send("Let the quiz begin! Here's the initial scoreboard:", view=quiz_controls)
-    await quiz_controls.send_scores(interaction)  # Display initial scores
-    await interaction.followup.send("Guess the song:", view=quiz_controls)
 
-
-
+    # Initialize quiz controls and send initial messages
+    quiz_controls = MusicQuizControls(bot, interaction, options, correct_option_index, playlist_url, 1, joined_users)
+    await interaction.followup.send("Let the quiz begin! Here's the initial scoreboard:", ephemeral=True)
+    await quiz_controls.send_scores("Quiz participants 📋:")
+    await interaction.followup.send("Guess the song:", view=quiz_controls, ephemeral=True)
 
 
 
@@ -428,38 +521,23 @@ async def quiz_category(interaction: discord.Interaction, category: str):
 
 
 ###### QUIZ BUTTONS #########
-class MusicQuizControls(View):
-    def __init__(self, bot, interaction, options, correct_option_index, playlist_url, songs_played=0):
-        super().__init__(timeout=None)
+import time
+
+class MusicQuizControls(discord.ui.View):
+    def __init__(self, bot, interaction, options, correct_option_index, playlist_url, songs_played=0, joined_users=None):
+        super().__init__(timeout=None)  # No timeout for the view
         self.bot = bot
         self.interaction = interaction
         self.options = options
         self.correct_option_index = correct_option_index
         self.playlist_url = playlist_url
         self.songs_played = songs_played
+        self.joined_users = joined_users if joined_users is not None else set()
         self.correct_guessed = False
-        self.joined_users = set()  # Track users who have joined the quiz
-
-        self.add_join_button()
+        self.song_start_time = time.time()
+        self.vote_started = False
+        self.user_points = {user_id: 0 for user_id in self.joined_users}  # Initialize user points for joined users
         self.add_option_buttons()
-
-    def add_join_button(self):
-        join_button = discord.ui.Button(label="Join Quiz", style=discord.ButtonStyle.green)
-
-        async def join_callback(interaction: discord.Interaction, button: discord.ui.Button):
-            self.joined_users.add(interaction.user.id)
-            await interaction.response.send_message(f"{interaction.user.display_name} has joined the quiz! 🎉", ephemeral=True)
-            button.disabled = True
-            await interaction.message.edit(view=self)
-
-        join_button.callback = join_callback
-        self.add_item(join_button)
-
-    async def start(self):
-        await asyncio.sleep(20)  # Wait for 20 seconds
-        self.remove_item(self.children[0])  # Assuming the "Join Quiz" button is the first item added
-        await self.interaction.edit_original_response(view=self)
-        await self.send_scores("Quiz participants 📋:")
 
     def add_option_buttons(self):
         for idx, option in enumerate(self.options):
@@ -474,98 +552,101 @@ class MusicQuizControls(View):
             self.add_item(button)
 
     async def handle_guess(self, button_interaction: discord.Interaction, guess_index):
-        user_id = button_interaction.user.id
-        user_points[user_id] = user_points.get(user_id, 0)
+        if not self.vote_started:
+            self.vote_started = True
 
+        user_id = button_interaction.user.id
+        # Ensure the user is marked as joined if they make a guess
+        self.joined_users.add(user_id)
+
+        # Initialize user points if not present
+        if user_id not in self.user_points:
+            self.user_points[user_id] = 0
+
+        # Handle guess and update points
         if guess_index == self.correct_option_index:
-            user_points[user_id] += 1
+            self.user_points[user_id] += 1
             response = f"Correct! +1 point. {button_interaction.user.mention} guessed it right."
             self.correct_guessed = True
         else:
-            user_points[user_id] -= 1
-            response = f"Incorrect! Zero points awarded. {button_interaction.user.mention} guessed it wrong."
+            self.user_points[user_id] -= 1
+            response = f"Incorrect! -1 point. {button_interaction.user.mention} guessed it wrong."
 
-        # Initially defer the response if there's any delay expected in processing
-        await button_interaction.response.defer(ephemeral=True)
 
-        # Use followup.send to send the response message
+        # Send feedback to the user
         await button_interaction.followup.send(response, ephemeral=True)
 
-        if guess_index == self.correct_option_index:
-            await self.change_song(button_interaction)  # Change song immediately after correct guess
-        else:
-            asyncio.create_task(self.delayed_song_change(button_interaction))  # Delayed song change for incorrect guess
+        # Disable further guesses and handle song change logic
+        if self.correct_guessed or time.time() - self.song_start_time >= 60:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button):
+                    item.disabled = True
+
+            if self.correct_guessed:
+                # Wait for 10 seconds before changing the song
+                await asyncio.sleep(10)
+            elif time.time() - self.song_start_time >= 60:
+                # Change the song immediately if 60 seconds have passed without a correct guess
+                pass  # No additional wait required
+
+            await self.change_song(button_interaction)
 
 
-        # Disable the guessed button to prevent multiple guesses
-        for item in self.children:
-            if isinstance(item, discord.ui.Button) and item.label == self.options[guess_index]:
-                item.disabled = True
-                await button_interaction.message.edit(view=self)
-                break
 
-    async def send_scores(self, message_prefix="Current scores 🏆:"):
+
+    async def send_scores(self, message_prefix=""):
         scores_message = message_prefix + "\n"
-        for user_id in self.joined_users:
-            points = user_points.get(user_id, 0)
+        for user_id, score in self.user_points.items():  # Iterate through user_points dictionary
             user = await self.bot.fetch_user(user_id)
-            scores_message += f"{user.name}: {points} points\n"
+            scores_message += f"🔹 {user.name}: {score} points\n"
 
-        await self.interaction.followup.send(scores_message, ephemeral=True)
+        # Use followup.send to make the scores message visible to everyone
+        await self.interaction.followup.send(scores_message)
 
-    async def delayed_song_change(self, interaction):
-        await asyncio.sleep(30)  # Wait for 30 seconds before changing the song
-        if not self.correct_guessed:  # Only change the song if the correct answer hasn't been guessed
-            await self.change_song(interaction)
-
-    async def next_song_timeout(self, interaction):
-        await asyncio.sleep(60)  # Wait for 60 seconds
-        if not self.correct_guessed:  # Check if the correct answer was not guessed
-            await self.change_song(self.interaction)  # Move to the next song
 
 
     async def change_song(self, interaction):
-        # Stop the current song and automatically trigger the next song in the queue
-        self.songs_played += 1  # Increment the song counter
-
-        if self.songs_played >= 6:
-            # The quiz ends after 10 songs
+        # Check if the quiz has reached the limit of songs to be played
+        if self.songs_played >= 5:
+            # Send final scores and reset the quiz
             await self.send_final_scores(interaction)
             await self.reset_quiz(interaction)
-            return  # Exit the method to prevent starting a new song
-        await skip_logic(interaction.guild)
-        self.correct_guessed = False
+            return
+
+        self.songs_played += 1  # Increment the song counter
+        self.correct_guessed = False  # Reset for the next song
+
         # Send the updated scores before starting the new song
-        await self.send_scores(interaction)
+        await self.send_scores("Current score 📋:")
 
         # Fetch new track URLs from the Spotify playlist for the next quiz question
         track_urls = get_spotify_playlist_tracks(self.playlist_url)
-        new_track_urls = [url for url in track_urls if url not in self.options]  # Ensure new songs are not repeats
+        new_track_urls = [url for url in track_urls if url not in self.options]  # Avoid repeating songs
         random_track_url = random.choice(new_track_urls)
 
-        # Update the queue with the new song for the next quiz question
+        # Update the song queue for the next quiz question
         guild_id = interaction.guild_id
-        if guild_id not in song_queues:
-            song_queues[guild_id] = deque()
-        song_queues[guild_id].clear()  # Clear the current queue
-        song_queues[guild_id].append(random_track_url)  # Add the new song to the queue
+        song_queues[guild_id] = deque([random_track_url])  # Reset the queue with the new song
 
         # Play the new song
-        if interaction.guild.voice_client.is_playing() or interaction.guild.voice_client.is_paused():
-            interaction.guild.voice_client.stop()
+        if interaction.guild.voice_client:
+            interaction.guild.voice_client.stop()  # Stop the current song if any
+
         await play_song_from_queue(interaction)
 
-        # Generate new quiz options ensuring they are unique and not repeating the previous ones
+        # Generate new quiz options ensuring they are unique and do not repeat the previous ones
         new_options = [random_track_url] + random.sample([url for url in new_track_urls if url != random_track_url], 3)
-        random.shuffle(new_options)  # Shuffle the new options
-        new_correct_option_index = new_options.index(random_track_url)  # Find the index of the correct option
+        random.shuffle(new_options)  # Shuffle the new options to randomize the display order
+        new_correct_option_index = new_options.index(random_track_url)  # Find the index of the correct option in the new options list
 
         # Create a new instance of MusicQuizControls with the new options for the next quiz question
-        new_quiz_controls = MusicQuizControls(self.bot, interaction, new_options, new_correct_option_index, self.playlist_url, songs_played=self.songs_played)
+        new_quiz_controls = MusicQuizControls(self.bot, interaction, new_options, new_correct_option_index, self.playlist_url, self.songs_played, self.joined_users)
 
         # Send a new message with the new quiz question and options
-        await interaction.followup.send("Guess the new song:", view=new_quiz_controls)
-        asyncio.create_task(self.next_song_timeout(interaction))
+        await interaction.followup.send("🎵 Guess the new song:", view=new_quiz_controls)
+
+
+
 
 
 
@@ -578,15 +659,41 @@ class MusicQuizControls(View):
         if guild_id in song_queues:
             song_queues[guild_id].clear()
 
-        # Optionally, send a message indicating the end of the quiz round and the reset
-        await interaction.followup.send("The quiz round has ended. Scores have been reset. Starting a new round...")
-
-    async def send_final_scores(self, interaction):
+    async def send_final_scores(self):
         await self.send_scores("🎉 The music quiz is over! Final scores 🎼:")
+            # Leave the voice channel after sending the final scores
+        voice_client = self.interaction.guild.voice_client
+        if voice_client and voice_client.is_connected():
+            await voice_client.disconnect()
     # Remember to add buttons for options when initializing MusicQuizControls
 
 
 # When initializing MusicQuizControls, also call add_buttons to add the option buttons
 
+
+###### LOGGING FOR DATA ANALYSES OF THE BOT  ###############
+import csv
+import datetime
+def log_interaction(interaction, action, details):
+    with open('bot_interactions.csv', 'a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        current_time = datetime.datetime.now().isoformat()
+        writer.writerow([interaction.user.id, interaction.user.name, action, details, str(interaction.created_at), current_time])
+
+def log_quiz_interaction(interaction, action, details):
+    with open('music_quiz_interactions.csv', 'a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        current_time = datetime.datetime.now().isoformat()  # Use the current time
+        writer.writerow([
+            interaction.user.id,
+            interaction.user.name,
+            action,
+            details,
+            current_time  # Log the current timestamp instead of interaction.created_at
+        ])
+
+
 ### TOKEN TO RUN THE BOT ####
+
 bot.run('')
+
