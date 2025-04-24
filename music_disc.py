@@ -103,8 +103,10 @@ class MusicControls(View):
 
 #### HANDLES ALL SPOTIFY LINKS. AS OF NOW ONLY TRACK AND PLAYLISTS LINKS ARE ALLOWED. PODCAST DO NOT WORK ###
 # Spotify API setup
-sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id="2531747cc22f4edd9d102dd9185d45fc",
-                                                           client_secret="bcae86795ee34ee7879b96c0c4247c34"))
+spot_api_id = "insert here"
+spot_api_secret = "insert here"
+sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id = spot_api_id,
+                                                           client_secret = spot_api_secret))
 
 
 bot = commands.Bot(command_prefix='£', intents=intents)
